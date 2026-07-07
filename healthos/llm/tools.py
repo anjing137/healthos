@@ -229,6 +229,55 @@ TOOLS_SPEC: list[dict] = [
             },
         },
     },
+    # ── 写工具(2026-07-08 放开 LLM 写层,全部走 audit_log)────
+    {
+        "type": "function",
+        "function": {
+            "name": "close_question",
+            "description": "关闭一条 open_question(把 status 改 'closed'、写入 resolved_grams)。所有改动都会写 audit_log。LLM 必须先向用户复述将做什么、得到用户确认后再调。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "qid": {"type": "integer", "description": "open_question.id"},
+                    "resolved_grams": {"type": "number", "description": "真实克数(0.0 表示没吃)"},
+                    "notes": {"type": "string", "description": "理由说明(进 audit_log,例如 '用户答复:一份 ~150g')"},
+                },
+                "required": ["qid", "resolved_grams", "notes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_workout_kcal",
+            "description": "手动校准一条 workout 的 kcal_burned(method='manual', confidence=1.0)。等价 `healthos fix-workout <id> --kcal=X`,但走 audit_log 留痕。LLM 必须先复述给用户确认。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "workout_id": {"type": "integer", "description": "workout.id"},
+                    "kcal": {"type": "number", "description": "真实 kcal"},
+                    "notes": {"type": "string", "description": "理由说明(进 audit_log)"},
+                },
+                "required": ["workout_id", "kcal", "notes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reparse_meal",
+            "description": "替换一条 meal 的 raw_text 并按当前 open_question 真值重新计算 kcals/protein_g。改动写 audit_log。LLM 必须先复述给用户确认。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meal_id": {"type": "integer", "description": "meal.id"},
+                    "new_raw_text": {"type": "string", "description": "新日记原话"},
+                    "notes": {"type": "string", "description": "理由说明(进 audit_log)"},
+                },
+                "required": ["meal_id", "new_raw_text", "notes"],
+            },
+        },
+    },
 ]
 
 
@@ -241,6 +290,17 @@ def dispatch(name: str, args: dict, db_path: Path | None = None) -> str:
             return json.dumps(get_recent_trend(int(args["window_days"]), db_path=db_path), ensure_ascii=False, default=str)
         if name == "get_open_questions":
             return json.dumps(get_open_questions(args.get("log_date"), db_path=db_path), ensure_ascii=False, default=str)
+        # 写工具
+        from ._tools import close_question, set_workout_kcal, reparse_meal
+        if name == "close_question":
+            return json.dumps(close_question(int(args["qid"]), float(args["resolved_grams"]),
+                                             args["notes"], db_path=db_path), ensure_ascii=False, default=str)
+        if name == "set_workout_kcal":
+            return json.dumps(set_workout_kcal(int(args["workout_id"]), float(args["kcal"]),
+                                                args["notes"], db_path=db_path), ensure_ascii=False, default=str)
+        if name == "reparse_meal":
+            return json.dumps(reparse_meal(int(args["meal_id"]), args["new_raw_text"],
+                                            args["notes"], db_path=db_path), ensure_ascii=False, default=str)
     except Exception as exc:
         return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
     return json.dumps({"error": f"unknown tool {name}"})

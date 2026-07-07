@@ -63,26 +63,39 @@ def test_record_with_question_also_kw():
 # ── LLM prompt 契约测试(2026-07-07 放开"建议层"后)────────────────
 
 
-def test_chat_system_allows_advice_but_prohibits_db_writes():
-    """CHAT_SYSTEM 必须同时满足两层契约:
-    (a) 可发建议/教练话术(已放开)
-    (b) LLM 不写 db(写 db 仍必须由用户在 REPL 显式 record/commit)
-    这两个字符串断言是 prompt 反向护栏 — 任何一方回滚会失败。
+def test_chat_system_allows_advice_and_writes_go_through_audit():
+    """CHAT_SYSTEM + tools.py 必须满足升级后的契约:
+    (a) 可发建议/教练话术
+    (b) 写工具必须在 audit_log 留痕(source='llm-agent'),而不是无审计的裸 UPDATE
+
+    2026-07-08 升级:LLM 现在可以调 3 个写工具(close_question / set_workout_kcal
+    / reparse_meal),但每条写都必须走 _audit_write — 这才是真正的护栏。
     """
     from healthos.llm.agent import CHAT_SYSTEM
-
-    # (a) 允许建议
-    assert "建议" in CHAT_SYSTEM, "CHAT_SYSTEM 应该允许 LLM 给建议"
-    # 反向断言:不该再有"不要给建议"那种旧限制字面
-    assert "不要主动给" not in CHAT_SYSTEM, "旧的 record_only 限制已废弃,不应再出现"
-    assert "record_only" not in CHAT_SYSTEM
-
-    # (b) 仍然不写 db
-    assert "不能写入" in CHAT_SYSTEM or "不能写" in CHAT_SYSTEM, \
-        "CHAT_SYSTEM 必须仍然声明 LLM 不能直接写 db"
-    # 工具面 `tools.py` 是真正的代码层护栏 — 同时验证
     from healthos.llm import tools
     import inspect
-    src = inspect.getsource(tools)
-    assert "INSERT" not in src and "UPDATE" not in src and "DELETE" not in src, \
-        "tools.py 必须是只读 — LLM 工具面不应该有写操作"
+
+    # (a) prompt 层:允许建议
+    assert "建议" in CHAT_SYSTEM
+    assert "不要主动给" not in CHAT_SYSTEM
+    assert "record_only" not in CHAT_SYSTEM
+
+    # (b) 写工具必须在 audit_log 留痕:tools.py 写工具的路径是 dispatch → _tools
+    # → _audit_write。三个写工具都必须经过 _audit_write。
+    from healthos.llm import _tools
+    _tools_src = inspect.getsource(_tools)
+    assert "_audit_write" in _tools_src, "_tools.py 必须使用 _audit_write 包装"
+    # 三工具每个都 update db + 调 _audit_write
+    assert "_audit_write" in inspect.getsource(_tools.close_question)
+    assert "_audit_write" in inspect.getsource(_tools.set_workout_kcal)
+    assert "_audit_write" in inspect.getsource(_tools.reparse_meal)
+
+    # 关键护栏:source 默认值是 'llm-agent' — LLM 走时不能伪装成 'repl'
+    from healthos.llm._tools import _audit_write
+    sig = inspect.signature(_audit_write)
+    assert sig.parameters["source"].default == "llm-agent"
+
+    # dispatch 路由了 3 个写工具
+    assert "close_question" in inspect.getsource(tools.dispatch)
+    assert "set_workout_kcal" in inspect.getsource(tools.dispatch)
+    assert "reparse_meal" in inspect.getsource(tools.dispatch)
