@@ -27,6 +27,13 @@ from ..db.conn import connect, init, upsert_daily_log
 from ..parser import parse as parse_sections
 from ..nutrition.quantify import parse_item, ParsedQuantity
 from ..record.write import record as record_main, today as today_iso
+from .profile import profile_block_for_prompt
+from .chat_memory import (
+    append_to_markdown,
+    get_or_create_session_id,
+    get_recent_history,
+    write_chat_log,
+)
 from ..llm.client import LLMRequest, chat, chat_json
 from ..llm.tools import (
     read_today, get_recent_trend, get_open_questions,
@@ -210,6 +217,27 @@ def run_chat(user_msg: str, today_iso: Optional[str] = None, yesterday_iso: Opti
 
     _SESSION.add_user(user_msg)
     sys_prompt = CHAT_SYSTEM.format(today_iso=today_iso, yesterday_iso=yesterday_iso)
+    # 注入 PROFILE.md(常驻画像)— 用户每次都看见的不变量,LLM 不必再 query
+    sys_prompt = sys_prompt + profile_block_for_prompt()
+
+    # P1 — 持久化历史召回:把同 session 的最近 N 轮 chat 拼进 prompt
+    session_id = get_or_create_session_id()
+    history = get_recent_history(session_id, limit=8)
+    history_text = ""
+    if history:
+        lines = ["\n<chat_history>\n以下是同一 session 之前的对话(给 LLM 续上下文用):\n"]
+        for h in history:
+            lines.append(f"[{h['created_at']}] {h['role']}: {h['content'][:300]}")
+        lines.append("\n</chat_history>\n")
+        history_text = "\n".join(lines)
+    sys_prompt = sys_prompt + history_text
+
+    # 写 user 消息到 chat_log + Markdown
+    try:
+        write_chat_log(session_id, "user", user_msg, today_iso)
+        append_to_markdown(session_id, "user", user_msg)
+    except Exception:
+        pass
 
     req = LLMRequest(
         system=sys_prompt,
@@ -224,6 +252,11 @@ def run_chat(user_msg: str, today_iso: Optional[str] = None, yesterday_iso: Opti
     # 如果 LLM 直接回 → 用
     if not resp.tool_calls:
         _SESSION.add_agent(resp.text)
+        try:
+            write_chat_log(session_id, "agent", resp.text, today_iso)
+            append_to_markdown(session_id, "agent", resp.text)
+        except Exception:
+            pass
         return resp.text
 
     # 如果调用工具 → 走 multi-turn
@@ -263,6 +296,13 @@ def run_chat(user_msg: str, today_iso: Optional[str] = None, yesterday_iso: Opti
     final_resp = chat(final_req)
 
     _SESSION.add_agent(final_resp.text)
+    try:
+        write_chat_log(session_id, "agent", final_resp.text, today_iso,
+                       metadata={"tool_calls": [tc.name for tc in resp.tool_calls]})
+        append_to_markdown(session_id, "agent", final_resp.text,
+                            metadata={"tool_calls": [tc.name for tc in resp.tool_calls]})
+    except Exception:
+        pass
 
     # 让 user 看到 LLM 调用了哪些 tool(以前 user 只看到 final text,中间吃了)
     tool_summary_lines = [
