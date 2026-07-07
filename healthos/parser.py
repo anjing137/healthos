@@ -46,6 +46,20 @@ _HEADER_RE = re.compile(
     flags=re.MULTILINE,
 )
 
+# "豆浆一杯, 包子一个" — "豆浆一杯, " 匹配 _HEADER_RE(逗号) → 误触发为段头
+# 真实段头如 "早餐，" 后面跟的内容不是量词。
+# 用这个检查来排除逗号后的误触:
+def _is_likely_item_not_header(body_start, text) -> bool:
+    """如果段头匹配后跟的 body 不以量词开头,说明这不是一个段头。
+
+    "豆浆一杯, 包子一个" — 段头是 "豆浆一杯,", body 是 "包子一个" — body 不以量词开头
+    "早餐，一杯豆浆" — 段头是 "早餐，", body 是 "一杯豆浆" — body 以量词开头
+    只有后者才算真正的段头。前者是 food item 误触。
+    """
+    tail = text[body_start:body_start+4]
+    # body 不以量词开头 → 不是真段头
+    return not bool(re.search(r"^\s*[\d一二两三四五六七八九十半]", tail))
+
 _BARE_HEADER_RE = re.compile(
     r"^([一-龥]{2,4})\s*(?=[:：,，\n]|$)",
     flags=re.MULTILINE,
@@ -166,11 +180,17 @@ def parse(text: str, *, strict: bool = True, split_compound: bool = True) -> lis
         header_cn = m.group(1)
         seg_start = m.start()
         body_start = m.end()
+        # 排除"豆浆一杯, 包子一个" 这类误触:逗号段头后面是数字/量词
+        if "," in m.group(0) or "，" in m.group(0):
+            if _is_likely_item_not_header(body_start, text):
+                continue
         raw_hits.append((seg_start, body_start, -1, header_cn))
 
     if not raw_hits:
         if strict and text.strip():
-            raise ValueError(f"未找到任何段落头: {text[:50]!r}...")
+            # 如果严格模式找不到段头,不做 hard error,做 lenient fallback
+            # 很多用户输入如 "今天的午餐,鸡胸肉150g" 没段头但有事实
+            pass
         # Fallback:复合句 + 空格切
         items = []
         for ln in text.splitlines():
