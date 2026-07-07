@@ -17,7 +17,10 @@
 
 5. **永远不要 `UPDATE resolved_grams=0`** 来批量关闭问题 — 用 `learn()` 逐条更新，保留 answer_text
 
-6. **LLM 不可直接写 SQLite，不可发建议** — `record_only=true`
+6. **LLM 角色分层**（已分两层,2026-07-07 升级）:
+  - **不可写 SQLite**:LLM 只能经 `record` / `commit` 路径入库,工具面 `healthos/llm/tools.py` 只读,无 INSERT/UPDATE/DELETE。
+  - **可发建议**:LLM 在 chat 子命令里能给短建议(基于 read_today / get_recent_trend 工具读到的数据),语气保持"可以试试"而非"立即做 X"。
+  - 旧约定 `record_only=true` 已废弃 — 不再约束 LLM 不发建议,只约束它不写 db。
 
 7. **Obsidian vault**: `/Volumes/video/obsidian/health/Daily/` — `healthos export` 默认写这里
 

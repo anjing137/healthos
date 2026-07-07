@@ -305,7 +305,7 @@ def cmd_week(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="healthos", description="Personal Health Agent (record-only)")
+    parser = argparse.ArgumentParser(prog="healthos", description="Personal Health Agent — record + advisor (LLM 不直接写 db,只能经 record/commit)")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径(默认 data/healthos.db)")
     sub = parser.add_subparsers(dest="cmd")
 
