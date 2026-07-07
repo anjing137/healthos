@@ -1,0 +1,90 @@
+# Health rules — single source of truth for all numeric defaults.
+# 
+# Why this file exists:
+# - All rules live here. Open, edit, save, takes effect.
+# - Every default that *I* (the agent's author) chose on the user's behalf
+#   is marked TODO so the user knows where their judgement overrides mine.
+
+
+# ────────────────────────────────────────────────────────────────────
+# Goals (减脂核心:摄入控制 + 体重趋势)
+# ────────────────────────────────────────────────────────────────────
+
+goals:
+  # 蛋白目标: g 蛋白 / kg 瘦体重
+  # TODO - 默认 1.6 来自 NSCA 减脂期指南(1.6-2.2 g/kg)。你自己按体重算。
+  protein_per_kg_lean_mass: 1.6
+
+  # 减脂每日热量缺口区间(单位:kcal;正数 = 吃的比消耗多)
+  # 减脂常见 -300 至 -500。低于 -700 多数人短期可以但情绪/激素会扛不住。
+  # TODO - 看 BMR/TDEE 以后再来对一下这个区间合不合理。
+  kcal_deficit_target_min: 300   # 表示至少缺 300(负值才是减脂;这里写的是 *绝对值*)
+  kcal_deficit_target_max: 500
+
+
+# ────────────────────────────────────────────────────────────────────
+# Baselines — 没有 InBody 数据时的兜底,等 InBody 进来以后自动覆盖
+# ────────────────────────────────────────────────────────────────────
+
+baselines:
+  bmr_formula: "mifflin_st_jeor"   # 不要改,除非你知道别的公式
+
+  # 活动乘数。1.55 = 轻中活动。范围 1.2(久坐) - 1.9(高强度运动员)。
+  # 常用分级: 1.2 / 1.375 / 1.55 / 1.725 / 1.9
+  # TODO - 你日常: 上班族 + 每周 3 次力量 + 每日步行 → 大概 1.55。改这个值很合理。
+  activity_factor: 1.55
+
+  # 这些值已被 InBody 7/2 实测覆盖(见 inbody 表);以后 fallback 不再触发。
+  # TODO - InBody 后续可能变化,但一年内不会再测,先固化这套。
+  fallback_weight_kg: 100.6       # InBody 7/2 实测
+  fallback_height_cm: 176.4       # InBody 7/2 实测
+  fallback_age: 35
+  fallback_sex: "male"
+
+# InBody 7/2 实测:BMR 1890 / 蛋白目标 130g / 目标体重 82.8kg
+# 这些是记录,deficit reporter 优先读 inbody 表,这里只是 backup / 元信息
+inbody_recorded:
+  date: "2026-07-02"
+  bmr_kcal: 1890
+  skeletal_muscle_kg: 40.3
+  body_fat_pct: 30.0
+  bmi: 32.3
+  target_weight_kg: 82.8
+  body_fat_target_pct: 20.0
+  daily_calorie_target_kcal: 2200
+  daily_protein_target_g: 130
+  weekly_weight_loss_target_kg: 0.5
+
+
+# ────────────────────────────────────────────────────────────────────
+# Agent 行为开关 — 第一版只当记录员
+# ────────────────────────────────────────────────────────────────────
+
+# 第一版 = true: Agent 只输出事实统计,不发"建议你怎样"。
+# 你哪天想开建议,把这个改成 false,然后我们一起设计 Coach Adam 的版本。
+record_only: true
+
+
+# ────────────────────────────────────────────────────────────────────
+# 趋势分析窗口
+# ────────────────────────────────────────────────────────────────────
+
+trend:
+  # 减脂的真章不是今天的缺口,是 7~14 天滑动平均体重
+  weight_window_days: 7
+
+  # 7 天平均下降 < 0.25kg → 大概率没真减脂,只说事实,不建议
+  weight_min_loss_kg_per_week: 0.25
+
+  # > 1.0kg/周 → 大概率掉水或瘦体重,只说事实,不建议
+  weight_max_loss_kg_per_week: 1.0
+
+
+# ────────────────────────────────────────────────────────────────────
+# Obsidian 输出(第一版不接,这里只记路径)
+# ────────────────────────────────────────────────────────────────────
+
+obsidian:
+  # 你的 vault 路径。第一版不接,只在此记录。
+  vault_path: "/Volumes/video/obsidian/health"
+  daily_note_subdir: "Daily"

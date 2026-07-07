@@ -1,0 +1,75 @@
+{
+  "record_type": "InBody570",
+  "test_date": "2026-07-02",
+  "subject": {
+    "height_cm": 176.4,
+    "gender": "male",
+    "age": null
+  },
+  "overall_score": 74,
+  "body_composition": {
+    "weight_kg": 100.6,
+    "target_weight_kg": 82.8,
+    "weight_control_kg": -17.8,
+    "fat_control_kg": -17.8,
+    "muscle_control_kg": 0.0,
+    "skeletal_muscle_mass_kg": 40.3,
+    "body_fat_mass_kg": 30.2,
+    "body_fat_percentage": 30.0,
+    "bmi": 32.3,
+    "basal_metabolic_rate_kcal": 1890
+  },
+  "obesity_analysis": {
+    "bmi_status": "Obese",
+    "body_fat_status": "High",
+    "visceral_fat_level": 11
+  },
+  "water_balance": {
+    "ecw_ratio": 0.370
+  },
+  "segmental_lean_mass": {
+    "left_arm": {"kg": 4.17, "percent": 108.5},
+    "right_arm": {"kg": 4.01, "percent": 104.3},
+    "trunk": {"kg": 31.4, "percent": 102.4},
+    "left_leg": {"kg": 10.69, "percent": 111.3},
+    "right_leg": {"kg": 10.67, "percent": 111.1}
+  },
+  "segmental_fat_mass": {
+    "left_arm": {"kg": 2.1, "percent": 278.4},
+    "right_arm": {"kg": 2.1, "percent": 279.3},
+    "trunk": {"kg": 15.5, "percent": 312.3},
+    "left_leg": {"kg": 4.5, "percent": 181.2},
+    "right_leg": {"kg": 4.5, "percent": 180.9}
+  },
+  "health_assessment": {
+    "muscle_status": "Excellent",
+    "fat_status": "High",
+    "muscle_balance": "Balanced",
+    "primary_issue": "Excess body fat",
+    "secondary_issue": "Visceral fat slightly elevated",
+    "strengths": [
+      "High skeletal muscle mass",
+      "Balanced left/right muscle distribution",
+      "Good basal metabolic rate"
+    ]
+  },
+  "long_term_goal": {
+    "goal_weight_kg": 88.0,
+    "goal_body_fat_percentage": 20.0,
+    "goal_visceral_fat_level": 9,
+    "goal_skeletal_muscle_kg": 39.0
+  },
+  "notes": {
+    "current_focus": [
+      "Fat loss",
+      "Maintain muscle mass",
+      "Protect right knee",
+      "Improve basketball performance"
+    ],
+    "recommendation": {
+      "daily_calorie_target_kcal": 2200,
+      "daily_protein_target_g": 130,
+      "weekly_weight_loss_target_kg": 0.5
+    }
+  }
+}

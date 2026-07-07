@@ -1,0 +1,26 @@
+# Byte-compiled / runtime
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local data — never commit
+data/healthos.db
+data/healthos.db-*
+data/exports/*.md
+!data/exports/.gitkeep
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# uv
+uv.lock
+
+# API keys + .env — 用户自己填
+.env
+.env.local
