@@ -27,6 +27,8 @@ from typing import Optional
 from ..db.conn import connect, upsert_daily_log, init
 from ..parser import parse as parse_sections
 from ..nutrition.quantify import parse_item, ParsedQuantity
+from ..nutrition.activities import lookup_sport, lookup_intensity
+from .workout_kcal import estimate_kcal, UnknownSport
 
 
 # ── Regex ──────────────────────────────────────────────────────────────
@@ -102,18 +104,50 @@ def _write_meal(
     return int(cur.lastrowid)
 
 
-def _write_workout(conn: sqlite3.Connection, log_date: str, raw_text: str) -> int:
+def _write_workout(conn: sqlite3.Connection, log_date: str, raw_text: str) -> tuple[int, Optional[int]]:
+    """写入一行 workout,返回 (workout_id, open_question_id 或 None)。
+
+    v1 hook:从 raw 抽 sport/intensity,查 MET 估算 kcal。
+    - 已知 sport → kcal_method='MET', qid=None
+    - unknown sport → kcal_method='pending', qid=open_question.id
+      (让 caller 把 qid 收回 RecordResult.questions,用户在 /today 看得到)
+    """
     duration = 0
     m = _DURATION_MIN_RE.search(raw_text)
     if m:
         duration = int(m.group(1))
-    parsed_json = json.dumps({"raw": raw_text, "duration_min_inferred": duration}, ensure_ascii=False)
-    cur = conn.execute(
-        """INSERT INTO workout(log_date, raw_text, parsed_json, duration_min, logged_at)
-           VALUES(?, ?, ?, ?, ?)""",
-        (log_date, raw_text, parsed_json, duration or None, _now_iso()),
+
+    sport = lookup_sport(raw_text)
+    intensity = lookup_intensity(raw_text) or "moderate"
+    kg = _latest_weight_kg(conn)
+    qid: Optional[int] = None
+    try:
+        kcal, conf = estimate_kcal(sport, intensity, duration, weight_kg=kg)
+        method = "MET"
+    except UnknownSport:
+        kcal, conf = None, None
+        method = "pending"
+        qid = _record_unknown_sport_question(conn, log_date, raw_text)
+
+    parsed_json = json.dumps(
+        {
+            "raw": raw_text,
+            "duration_min_inferred": duration,
+            "kcal_method": method,
+            "confidence": conf,
+        },
+        ensure_ascii=False,
     )
-    return int(cur.lastrowid)
+    cur = conn.execute(
+        """INSERT INTO workout(log_date, raw_text, parsed_json, duration_min, logged_at,
+                               sport, intensity, kcal_burned, kcal_method, confidence)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            log_date, raw_text, parsed_json, duration or None, _now_iso(),
+            sport, intensity, kcal, method, conf,
+        ),
+    )
+    return int(cur.lastrowid), qid
 
 
 def _write_sleep(conn: sqlite3.Connection, log_date: str, raw_text: str) -> int:
@@ -220,6 +254,47 @@ def _record_open_question(
     return int(cur.lastrowid)
 
 
+# ── v1 — workout kcal hook 用的本地 helper ──────────────────────────────
+
+
+def _latest_weight_kg(conn: sqlite3.Connection) -> Optional[float]:
+    """取最近一条体重(kg),没有 → None,estimate_kcal 会 fallback 70。
+
+    复用 deficit.py:53-59 的 Pattern A:无日期约束的最新一条。
+    工作卡住的风险点:weight 表外键到 daily_log,需要 upsert_daily_log 先跑过。
+    """
+    row = conn.execute(
+        "SELECT weight_kg FROM weight ORDER BY measured_at DESC LIMIT 1"
+    ).fetchone()
+    if row and row["weight_kg"]:
+        return float(row["weight_kg"])
+    return None
+
+
+def _record_unknown_sport_question(
+    conn: sqlite3.Connection,
+    log_date: str,
+    raw_text: str,
+) -> int:
+    """Unknown sport → 走 open_question,让用户给个 MET 近似或纠正名称。"""
+    cur = conn.execute(
+        """INSERT INTO open_question(log_date, meal_slot, raw_item, food_name,
+                                     default_grams, default_kcals, default_protein_g,
+                                     question, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            log_date,
+            None,                # 非餐段, slot 留空
+            raw_text,
+            None,                # 没有食物命中
+            None, 0.0, 0.0,
+            f"这是什么运动?{raw_text!r}(MET 我不知道,能给个大致数值或同类运动吗?)",
+            _now_iso(),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
 # ── 主入口 ──────────────────────────────────────────────────────────────
 
 
@@ -281,7 +356,9 @@ def record(
                 meals += 1
 
             elif sec.name == "workout":
-                _write_workout(conn, log_date, sec.raw)
+                _, qid = _write_workout(conn, log_date, sec.raw)
+                if qid:
+                    all_question_ids.append(qid)
                 workouts += 1
             elif sec.name == "sleep":
                 _write_sleep(conn, log_date, sec.raw)
