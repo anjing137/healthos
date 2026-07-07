@@ -17,7 +17,7 @@ trend:
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -131,7 +131,11 @@ class DeficitReport:
     weight_date: Optional[str]
     weight_trend_7d: Optional[float]
     weight_trend_30d: Optional[float]
-    notes: list[str]
+    # v1 — workout kcal 消耗并入缺口
+    workout_kcal: float = 0.0
+    workout_kcal_estimated_count: int = 0
+    workout_pending_count: int = 0
+    notes: list[str] = field(default_factory=list)
 
 
 def build_deficit(log_date: str, db_path: Optional[Path] = None) -> DeficitReport:
@@ -148,6 +152,19 @@ def build_deficit(log_date: str, db_path: Optional[Path] = None) -> DeficitRepor
         intake_kcal, intake_protein = _intake_kcal(conn, log_date)
         weight_kg, weight_date = _latest_weight(conn)
 
+        # v1 — 读 workout kcal,自动排除 NULL 行(SUM(kcal_burned) 已天然排除)
+        wk = conn.execute(
+            """SELECT
+                 COALESCE(SUM(kcal_burned), 0) AS total_kcal,
+                 COALESCE(SUM(CASE WHEN kcal_method IN ('MET','manual') THEN 1 ELSE 0 END), 0) AS n_estimated,
+                 COALESCE(SUM(CASE WHEN kcal_method='pending' THEN 1 ELSE 0 END), 0) AS n_pending
+               FROM workout WHERE log_date=?""",
+            (log_date,),
+        ).fetchone()
+        workout_kcal = float(wk["total_kcal"] or 0)
+        workout_n_estimated = int(wk["n_estimated"] or 0)
+        workout_n_pending = int(wk["n_pending"] or 0)
+
         notes = []
         bmr_known = bmr is not None
         if not bmr_known:
@@ -157,7 +174,9 @@ def build_deficit(log_date: str, db_path: Optional[Path] = None) -> DeficitRepor
             kg_week = None
         else:
             tdee = bmr * activity
-            deficit = tdee - intake_kcal  # 正 = 减脂(吃得比 TDEE 少)
+            # 缺口 = (TDEE + 运动燃烧) - 摄入;正=减脂
+            # workout_kcal 已经从 SUM(kcal_burned) 来,NULL 行天然排除。
+            deficit = (tdee + workout_kcal) - intake_kcal
             kg_week = (deficit * 7) / KCAL_PER_KG_FAT
 
         if intake_kcal < 100:
@@ -192,6 +211,9 @@ def build_deficit(log_date: str, db_path: Optional[Path] = None) -> DeficitRepor
             weight_date=weight_date,
             weight_trend_7d=round(trend_7d, 1) if trend_7d is not None else None,
             weight_trend_30d=round(trend_30d, 1) if trend_30d is not None else None,
+            workout_kcal=round(workout_kcal, 0),
+            workout_kcal_estimated_count=workout_n_estimated,
+            workout_pending_count=workout_n_pending,
             notes=notes,
         )
     finally:
@@ -215,7 +237,9 @@ def format_deficit(r: DeficitReport) -> str:
         lines.append(f"  BMR {r.bmr_kcal:.0f} kcal (来源: {'InBody ' + r.bmr_source_date if r.bmr_source_date and r.bmr_source_date != 'yaml-fallback' else 'yaml fallback'})")
         lines.append(f"  活动系数 {r.activity_factor:.2f}")
         lines.append(f"  TDEE 估算 {r.tdee_kcal:.0f} kcal")
-        lines.append(f"  缺口 {r.deficit_kcal:+.0f} kcal (摄入 - TDEE;正=减脂)")
+        if r.workout_kcal:
+            lines.append(f"  运动燃烧 ~{r.workout_kcal:.0f} kcal ({r.workout_kcal_estimated_count} 条已估" + (f" / {r.workout_pending_count} 条待补" if r.workout_pending_count else "") + ")")
+        lines.append(f"  缺口 {r.deficit_kcal:+.0f} kcal (摄入 - TDEE - 运动;正=减脂)")
         if r.estimated_kg_per_week is not None:
             lines.append(f"  估算掉秤 {r.estimated_kg_per_week:.2f} kg/wk (按 7700 kcal/kg)")
         else:

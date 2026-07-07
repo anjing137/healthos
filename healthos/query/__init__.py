@@ -36,6 +36,11 @@ class TodayReport:
     log_date: str
     meals: list[MealRow] = field(default_factory=list)
     workout_minutes: int = 0
+    # v1 — workout kcal 估算合并
+    workout_kcal: float = 0.0
+    workout_kcal_estimated_count: int = 0
+    workout_kcal_manual_count: int = 0
+    workout_pending_count: int = 0
     sleep_duration_min: Optional[float] = None
     knee_tightness: Optional[int] = None
     kcals: float = 0.0
@@ -158,6 +163,21 @@ def build_today(log_date: str, db_path: Optional[Path] = None) -> TodayReport:
             (log_date,),
         ).fetchone()
         rep.workout_minutes = int(w["total"] or 0)
+
+        # v1 — workout kcal 估算 + method 计数
+        wk = conn.execute(
+            """SELECT
+                 COALESCE(SUM(kcal_burned), 0) AS total_kcal,
+                 COALESCE(SUM(CASE WHEN kcal_method='MET'    THEN 1 ELSE 0 END), 0) AS n_met,
+                 COALESCE(SUM(CASE WHEN kcal_method='manual' THEN 1 ELSE 0 END), 0) AS n_manual,
+                 COALESCE(SUM(CASE WHEN kcal_method='pending' THEN 1 ELSE 0 END), 0) AS n_pending
+               FROM workout WHERE log_date=?""",
+            (log_date,),
+        ).fetchone()
+        rep.workout_kcal = round(float(wk["total_kcal"] or 0), 1)
+        rep.workout_kcal_estimated_count = int(wk["n_met"] or 0) + int(wk["n_manual"] or 0)
+        rep.workout_kcal_manual_count = int(wk["n_manual"] or 0)
+        rep.workout_pending_count = int(wk["n_pending"] or 0)
 
         # sleep
         s = conn.execute(

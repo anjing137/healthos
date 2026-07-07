@@ -52,7 +52,14 @@ def _format_report(r) -> str:
     lines.append("── 今日合计 ──")
     lines.append(f"  kcal {r.kcals:.0f}   蛋白 {r.protein_g:.1f}   脂肪 {r.fat_g:.1f}   碳水 {r.carb_g:.1f}")
     if r.workout_minutes:
-        lines.append(f"  训练 {r.workout_minutes} min")
+        suffix = f"  训练 {r.workout_minutes} min"
+        if r.workout_kcal:
+            suffix += f"  燃烧 ~{r.workout_kcal:.0f} kcal"
+            if r.workout_kcal_estimated_count:
+                suffix += f" ({r.workout_kcal_estimated_count} 条已估)"
+            if r.workout_pending_count:
+                suffix += f" / {r.workout_pending_count} 条待补"
+        lines.append(suffix)
     if r.sleep_duration_min:
         hrs = r.sleep_duration_min / 60
         lines.append(f"  睡眠 {hrs:.1f} h")
@@ -81,6 +88,17 @@ def cmd_deficit(args: argparse.Namespace) -> int:
     log_date = args.date_str or getattr(args, "date", None) or today_iso()
     rep = build_deficit(log_date, args.db)
     print(format_deficit(rep))
+    return 0
+
+
+def cmd_fix_workout(args: argparse.Namespace) -> int:
+    """手动校准单条 workout 的 kcal(CLAUDE.md 第 5 条精神:逐条改,不批量)。"""
+    from .record.fix_workout import patch_workout_kcal
+    res = patch_workout_kcal(args.id, args.kcal, args.db)
+    if res is None:
+        print(f"✗ workout #{args.id} 不存在")
+        return 1
+    print(f"✓ workout #{args.id} 校准为 {res['kcal_burned']} kcal (method=manual, conf=1.0)")
     return 0
 
 
@@ -140,9 +158,50 @@ def cmd_verify_answer(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ai_record_or_fallback(text: str, log_date: str, db_path: Path) -> tuple[str, bool]:
+    """尝试 LLM 主路径；不可用或失败则回退 parser。
+    返回 (message, used_ai: bool)。
+    """
+    from .llm.record_ai import (
+        preview_ai_record, commit_ai_preview, format_ai_preview, can_use_llm,
+    )
+    if not can_use_llm():
+        return ("", False)
+
+    try:
+        preview = preview_ai_record(text)
+    except Exception as e:
+        print(f"LLM 解析失败 ({e}), 回退到传统 parser...")
+        return ("", False)
+
+    print(format_ai_preview(preview))
+    print()
+    try:
+        ans = input("确认写入? [Y/n] ").strip().lower()
+    except EOFError:
+        ans = "n"
+    if ans not in ("", "y", "yes"):
+        return ("已取消。", True)
+
+    res = commit_ai_preview(preview, log_date, db_path)
+    msg = f"✓ {res.meals} meals / {res.workouts} workouts / {res.sleep_rows} sleeps / {res.knee_rows} knees"
+    if res.warnings:
+        msg += f"\n⚠ warnings: {res.warnings}"
+    if res.notes:
+        msg += f"\n📝 {res.notes}"
+    return (msg, True)
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     text = " ".join(args.text)
     log_date = args.date or today_iso()
+
+    if not getattr(args, "no_llm", False):
+        msg, used_ai = _ai_record_or_fallback(text, log_date, args.db)
+        if used_ai:
+            print(msg)
+            return 0
+
     res = record(text, log_date, args.db)
     print(f"✓ recorded {res.meals} meals / {res.workouts} workouts / {res.sleep_rows} sleeps / {res.knee_rows} knees")
     if res.warnings:
@@ -169,10 +228,17 @@ def cmd_repl(args: argparse.Namespace) -> int:
 
 
 def cmd_r(args: argparse.Namespace) -> int:
-    """REPL 内部 /r 入口 — 走 record(lenient=True)。"""
-    from .record.write import record as record_main
+    """REPL 内部 /r 入口 — LLM 优先，回退 parser(lenient=True)。"""
     text = " ".join(args.text)
     log_date = args.date or today_iso()
+
+    if not getattr(args, "no_llm", False):
+        msg, used_ai = _ai_record_or_fallback(text, log_date, args.db)
+        if used_ai:
+            print(msg)
+            return 0
+
+    from .record.write import record as record_main
     res = record_main(text, log_date, args.db, lenient=True)
     print(f"ok — {res.meals} meals / {res.workouts} workouts / {res.sleep_rows} sleeps / {res.knee_rows} knees")
     if res.warnings:
@@ -251,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     p_rec = sub.add_parser("record", help="录入一日日记")
     p_rec.add_argument("text", nargs="+", help="日记正文(可多段)")
     p_rec.add_argument("--date", help="YYYY-MM-DD;缺省今天")
+    p_rec.add_argument("--no-llm", action="store_true", help="强制使用传统 parser（不用 LLM）")
     p_rec.set_defaults(func=cmd_record)
 
     p_learn = sub.add_parser("learn", help="回答 open question")
@@ -262,6 +329,11 @@ def main(argv: list[str] | None = None) -> int:
     p_def.add_argument("date_str", nargs="?", default=None, help="YYYY-MM-DD(位置参数);缺省今天")
     p_def.add_argument("--date", help="YYYY-MM-DD(兼容旧版)")
     p_def.set_defaults(func=cmd_deficit)
+
+    p_fix = sub.add_parser("fix-workout", help="手动校准训练 kcal(单条)")
+    p_fix.add_argument("id", type=int, help="workout.id")
+    p_fix.add_argument("--kcal", type=float, required=True, help="实际 kcal")
+    p_fix.set_defaults(func=cmd_fix_workout)
 
     p_chat = sub.add_parser("chat", help="跟 LLM 自由聊天(原文不入 db;commit 才入)")
     p_chat.add_argument("text", nargs="+", help="你的问/说")

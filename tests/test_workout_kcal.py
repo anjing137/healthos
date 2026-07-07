@@ -1,6 +1,6 @@
 """v1 — workout kcal 估算 + schema + parser hook 测试。
 
-10 个 case:
+11 个 case:
  1. 篮球 50min moderate / 100kg → kcal ≈ 542, conf 0.85
  2. 跑步 60min high / 100kg → kcal ≈ 1150, conf 0.85
  3. 强度缺失 → conf 0.70(default moderate)
@@ -11,6 +11,7 @@
  8. unknown sport 写 open_question
  9. 老 workout 行 sport 仍 NULL
 10. deficit 计算排除 NULL kcal_burned
+11. fix-workout 单条手动校准(method='manual', conf=1.0)
 
 使用 mock 化的 estimate_kcal 路径,覆盖 claim 不超 ±5%。
 数值断言用 pytest.approx,因为 MET × kg × h 本身就是 ±15% 系统误差。
@@ -31,6 +32,7 @@ from healthos.nutrition.activities import (
     lookup_sport,
 )
 from healthos.record import record
+from healthos.record.fix_workout import patch_workout_kcal
 from healthos.record.workout_kcal import UnknownSport, estimate_kcal
 
 
@@ -245,3 +247,38 @@ def test_met_table_has_12_sports():
     """设计 frozen:12 项字典,加新项必须显式改测试以提醒。"""
     assert len(MET_TABLE) == 12
     assert {"basketball", "walking_slow", "knee_rehab"} <= set(MET_TABLE)
+
+
+def test_fix_workout_overrides_to_manual(fresh_db):
+    """写一条 basketball,然后 fix-workout 把它从 MET 改成 manual。
+
+    满足 CLAUDE.md 第 5 条:逐条改,不批量。
+    """
+    res = record("运动:打篮球 30 分钟 中", log_date="2026-07-07", db_path=fresh_db)
+    assert res.workouts == 1
+    c = db_conn.connect(fresh_db)
+    wid = c.execute("SELECT id FROM workout ORDER BY id DESC LIMIT 1").fetchone()["id"]
+    c.close()
+
+    out = patch_workout_kcal(wid, 420.0, db_path=fresh_db)
+    assert out is not None
+    assert out["kcal_burned"] == 420.0
+    assert out["kcal_method"] == "manual"
+    assert out["confidence"] == 1.0
+
+    # 验证 db 真的被改了
+    c = db_conn.connect(fresh_db)
+    row = c.execute(
+        "SELECT kcal_burned, kcal_method, confidence FROM workout WHERE id=?",
+        (wid,),
+    ).fetchone()
+    assert row["kcal_burned"] == 420.0
+    assert row["kcal_method"] == "manual"
+    assert row["confidence"] == 1.0
+    c.close()
+
+
+def test_fix_workout_returns_none_for_missing_id(fresh_db):
+    """不存在的 id 返回 None(不抛)。"""
+    out = patch_workout_kcal(9999, 100.0, db_path=fresh_db)
+    assert out is None
